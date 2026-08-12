@@ -40,6 +40,10 @@ def _row_to_job(row) -> Job:
     home_directory=row["home_directory"],
     domain=row["domain"],
     wp_cron_path=row["wp_cron_path"],
+    command=row["command"],
+    php_executable=row["php_executable"],
+    relative_script_path=row["relative_script_path"],
+    site_root=row["site_root"],
     minute=row["minute"],
     hour=row["hour"],
     day=row["day"],
@@ -123,6 +127,10 @@ class JobRepository:
     schedule_expression: str,
     enabled: bool = True,
     last_seen: Optional[int] = None,
+    command: Optional[str] = None,
+    php_executable: Optional[str] = None,
+    relative_script_path: Optional[str] = None,
+    site_root: Optional[str] = None,
   ) -> int:
     now = _now()
     if last_seen is None:
@@ -139,6 +147,10 @@ class JobRepository:
                     home_directory,
                     domain,
                     wp_cron_path,
+                    command,
+                    php_executable,
+                    relative_script_path,
+                    site_root,
                     minute,
                     hour,
                     day,
@@ -150,7 +162,7 @@ class JobRepository:
                     updated_at,
                     last_seen
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
           job_key,
@@ -160,6 +172,10 @@ class JobRepository:
           home_directory,
           domain,
           wp_cron_path,
+          command,
+          php_executable,
+          relative_script_path,
+          site_root,
           minute,
           hour,
           day,
@@ -235,6 +251,10 @@ class JobRepository:
     home_directory: Optional[str] = None,
     domain: Optional[str] = None,
     wp_cron_path: Optional[str] = None,
+    command: Optional[str] = None,
+    php_executable: Optional[str] = None,
+    relative_script_path: Optional[str] = None,
+    site_root: Optional[str] = None,
     minute: Optional[str] = None,
     hour: Optional[str] = None,
     day: Optional[str] = None,
@@ -260,6 +280,10 @@ class JobRepository:
       "home_directory": home_directory,
       "domain": domain,
       "wp_cron_path": wp_cron_path,
+      "command": command,
+      "php_executable": php_executable,
+      "relative_script_path": relative_script_path,
+      "site_root": site_root,
       "minute": minute,
       "hour": hour,
       "day": day,
@@ -322,9 +346,9 @@ class JobRepository:
     status: str,
   ) -> bool:
     """
-        Update job-level execution statistics after an execution finishes.
+    Update job-level execution statistics after an execution finishes.
 
-        status must be SUCCESS or FAILED.
+    status must be SUCCESS or FAILED.
     """
     if status not in ("SUCCESS", "FAILED"):
       raise ValueError(f"invalid execution status: {status}")
