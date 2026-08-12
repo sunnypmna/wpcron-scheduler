@@ -1,0 +1,186 @@
+#!/bin/bash
+#
+# WP Cron Scheduler - Phase 1 / Step 8
+# CageFS-safe unprivileged wrapper
+#
+# The request file contains the FULL absolute wp-cron.php path.
+#
+# Example:
+#   /home/rankinghoa/public_html/wp-cron.php
+#
+# The privileged consumer derives the account from the request location/
+# ownership and independently validates the path against scheduler state.
+#
+
+set -euo pipefail
+umask 077
+
+usage() {
+    echo "Usage:"
+    echo "  wpcron-wrapper --account USERNAME --path /absolute/path/wp-cron.php"
+    echo "  wpcron-wrapper --account USERNAME --path /absolute/path/wp-cron.php --dry-run"
+}
+
+fail() {
+    printf '[FAIL] %s\n' "$*" >&2
+    exit 1
+}
+
+log() {
+    printf '[INFO] %s\n' "$*"
+}
+
+ACCOUNT=""
+SCRIPT_PATH=""
+DRY_RUN=0
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --account)
+            [[ $# -ge 2 ]] || { usage; exit 2; }
+            ACCOUNT="$2"
+            shift 2
+            ;;
+        --path)
+            [[ $# -ge 2 ]] || { usage; exit 2; }
+            SCRIPT_PATH="$2"
+            shift 2
+            ;;
+        --dry-run)
+            DRY_RUN=1
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        *)
+            usage
+            exit 2
+            ;;
+    esac
+done
+
+[[ -n "$ACCOUNT" ]] || { usage; exit 2; }
+[[ -n "$SCRIPT_PATH" ]] || { usage; exit 2; }
+
+CURRENT_USER="$(id -un)"
+
+[[ "$CURRENT_USER" == "$ACCOUNT" ]] ||
+    fail "Wrapper must run as '$ACCOUNT'; current user is '$CURRENT_USER'."
+
+case "$ACCOUNT" in
+    ""|*[!a-zA-Z0-9._-]*)
+        fail "Invalid account name."
+        ;;
+esac
+
+[[ "$SCRIPT_PATH" = /* ]] ||
+    fail "Target path must be absolute."
+
+[[ "$(basename "$SCRIPT_PATH")" == "wp-cron.php" ]] ||
+    fail "Target must be wp-cron.php."
+
+case "$SCRIPT_PATH" in
+    *$'\n'*|*$'\r'*|*'|'*)
+        fail "Invalid script path."
+        ;;
+esac
+
+ACCOUNT_HOME="$(getent passwd "$ACCOUNT" | awk -F: '{print $6}')"
+
+[[ -n "$ACCOUNT_HOME" ]] ||
+    fail "Could not determine account home."
+
+ACCOUNT_HOME="$(realpath -e "$ACCOUNT_HOME" 2>/dev/null)" ||
+    fail "Account home does not exist."
+
+case "$SCRIPT_PATH" in
+    "$ACCOUNT_HOME/"*)
+        ;;
+    *)
+        fail "Target is outside account home."
+        ;;
+esac
+
+TARGET_EXISTS=0
+
+if [[ -e "$SCRIPT_PATH" ]]; then
+    TARGET_EXISTS=1
+
+    REAL_TARGET="$(realpath -e "$SCRIPT_PATH" 2>/dev/null)" ||
+        fail "Unable to resolve target path."
+
+    [[ "$REAL_TARGET" == "$ACCOUNT_HOME/"* ]] ||
+        fail "Resolved target is outside account home."
+
+    [[ -f "$REAL_TARGET" ]] ||
+        fail "Target is not a regular file."
+
+    # Submit the canonical absolute path rather than the caller-supplied
+    # path when the target exists.
+    SCRIPT_PATH="$REAL_TARGET"
+fi
+
+RELATIVE_PATH="${SCRIPT_PATH#"$ACCOUNT_HOME"/}"
+
+[[ -n "$RELATIVE_PATH" ]] ||
+    fail "Could not determine relative path."
+
+REQUEST_DIR="${ACCOUNT_HOME}/.wpcron-scheduler"
+REQUEST_FILE="${REQUEST_DIR}/request"
+
+if (( DRY_RUN )); then
+    echo "Wrapper dry-run"
+    echo "Account        : $ACCOUNT"
+    echo "Account home   : $ACCOUNT_HOME"
+    echo "Script path    : $SCRIPT_PATH"
+    echo "Relative path  : $RELATIVE_PATH"
+    echo "Target exists  : $TARGET_EXISTS"
+    echo "Request file   : $REQUEST_FILE"
+    exit 0
+fi
+
+if [[ ! -e "$REQUEST_DIR" ]]; then
+    mkdir "$REQUEST_DIR"
+    chmod 700 "$REQUEST_DIR"
+fi
+
+[[ -d "$REQUEST_DIR" ]] ||
+    fail "Request channel is not a directory."
+
+[[ ! -L "$REQUEST_DIR" ]] ||
+    fail "Request channel is a symlink."
+
+if [[ -e "$REQUEST_FILE" || -L "$REQUEST_FILE" ]]; then
+    if [[ -L "$REQUEST_FILE" ]]; then
+        fail "Request file is a symlink."
+    fi
+
+    log "Admission request already pending."
+    exit 0
+fi
+
+chmod 700 "$REQUEST_DIR"
+
+TMP_FILE="${REQUEST_FILE}.tmp.$$"
+
+# Only the canonical full absolute path is submitted.
+# The privileged consumer must treat it as untrusted input and independently
+# validate account ownership, path safety, and scheduler state.
+echo "$SCRIPT_PATH" > "$TMP_FILE"
+
+chmod 600 "$TMP_FILE"
+
+# Atomic publication. Do not overwrite an existing request.
+if ln "$TMP_FILE" "$REQUEST_FILE" 2>/dev/null; then
+    rm -f "$TMP_FILE"
+    log "Admission request submitted."
+    exit 0
+fi
+
+rm -f "$TMP_FILE"
+
+log "Admission request already pending."
+exit 0
+
