@@ -18,31 +18,88 @@ fail() {
 
 [[ "$(id -u)" -eq 0 ]] || fail "installer must run as root"
 
+[[ -f "$SCRIPT_DIR/bin/wpcron-wrapper" ]] ||
+  fail "missing bin/wpcron-wrapper"
+
+[[ -f "$SCRIPT_DIR/config/wpcron-wrapper.cfg" ]] ||
+  fail "missing config/wpcron-wrapper.cfg"
+
+[[ -f "$SCRIPT_DIR/lib/executor.py" ]] ||
+  fail "missing lib/executor.py"
+
+[[ -f "$SCRIPT_DIR/lib/models.py" ]] ||
+  fail "missing lib/models.py"
+
+[[ -f "$SCRIPT_DIR/lib/repositories.py" ]] ||
+  fail "missing lib/repositories.py"
+
 mkdir -p "$INSTALL_LIB"
 
-install -m 0755 "$SCRIPT_DIR/bin/wpcron-wrapper" \
+# Remove generated/cache and backup files from previous installations.
+rm -rf "$INSTALL_LIB/__pycache__"
+rm -f "$INSTALL_LIB"/*.bak
+rm -f "$INSTALL_LIB"/*.phase1.bak
+rm -f "$INSTALL_LIB"/*.pyc
+
+# Install the wrapper.
+install -m 0755 \
+  "$SCRIPT_DIR/bin/wpcron-wrapper" \
   "$INSTALL_BIN/wpcron-wrapper"
 
+# Install Python source files only.
 for file in "$SCRIPT_DIR"/lib/*.py; do
-  install -m 0644 "$file" "$INSTALL_LIB/$(basename "$file")"
+  install -m 0644 \
+    "$file" \
+    "$INSTALL_LIB/$(basename "$file")"
 done
 
-install -m 0644 "$SCRIPT_DIR/config/wpcron-wrapper.cfg" \
-  "$CAGEFS_CONF"
-
+# Install version information.
 if [[ -f "$SCRIPT_DIR/VERSION" ]]; then
-  install -m 0644 "$SCRIPT_DIR/VERSION" \
+  install -m 0644 \
+    "$SCRIPT_DIR/VERSION" \
     "$INSTALL_LIB/VERSION"
 fi
 
+# Install CageFS configuration.
+install -m 0644 \
+  "$SCRIPT_DIR/config/wpcron-wrapper.cfg" \
+  "$CAGEFS_CONF"
+
+# Ensure no generated/cache/backup files remain in the installed tree.
+rm -rf "$INSTALL_LIB/__pycache__"
+rm -f "$INSTALL_LIB"/*.bak
+rm -f "$INSTALL_LIB"/*.phase1.bak
+rm -f "$INSTALL_LIB"/*.pyc
+
+# Validate the installed Python source.
 python3 -m py_compile "$INSTALL_LIB"/*.py
 
-if command -v cagefsctl >/dev/null 2>&1; then
-  cagefsctl --force-update
-else
-  fail "cagefsctl not found"
-fi
+# Verify the Phase 2 model/repository fields before refreshing CageFS.
+grep -q 'php_executable' "$INSTALL_LIB/models.py" ||
+  fail "Phase 2 models.py was not installed"
 
+grep -q 'relative_script_path' "$INSTALL_LIB/models.py" ||
+  fail "Phase 2 models.py is missing relative_script_path"
+
+grep -q 'site_root' "$INSTALL_LIB/models.py" ||
+  fail "Phase 2 models.py is missing site_root"
+
+grep -q 'php_executable=row' "$INSTALL_LIB/repositories.py" ||
+  fail "Phase 2 repositories.py was not installed"
+
+grep -q 'relative_script_path=row' "$INSTALL_LIB/repositories.py" ||
+  fail "Phase 2 repositories.py is missing relative_script_path"
+
+grep -q 'site_root=row' "$INSTALL_LIB/repositories.py" ||
+  fail "Phase 2 repositories.py is missing site_root"
+
+# Refresh CageFS after the complete installation.
+command -v cagefsctl >/dev/null 2>&1 ||
+  fail "cagefsctl not found"
+
+cagefsctl --force-update
+
+# Final production-tree checks.
 [[ -x "$INSTALL_BIN/wpcron-wrapper" ]] ||
   fail "wrapper installation failed"
 
@@ -55,17 +112,23 @@ fi
 [[ -f "$INSTALL_LIB/repositories.py" ]] ||
   fail "repositories.py installation failed"
 
-grep -q 'php_executable' "$INSTALL_LIB/models.py" ||
-  fail "Phase 2 models.py was not installed"
+if [[ -d "$INSTALL_LIB/__pycache__" ]]; then
+  fail "unexpected __pycache__ remains in installed tree"
+fi
 
-grep -q 'php_executable=row' "$INSTALL_LIB/repositories.py" ||
-  fail "Phase 2 repositories.py was not installed"
+if compgen -G "$INSTALL_LIB/*.bak" >/dev/null ||
+   compgen -G "$INSTALL_LIB/*.phase1.bak" >/dev/null ||
+   compgen -G "$INSTALL_LIB/*.pyc" >/dev/null; then
+  fail "unexpected backup/bytecode files remain in installed tree"
+fi
 
 log "Installed wrapper: $INSTALL_BIN/wpcron-wrapper"
 log "Installed Python modules: $INSTALL_LIB"
 log "Installed CageFS config: $CAGEFS_CONF"
 log "Python syntax validation passed"
+log "Phase 2 model/repository validation passed"
 log "CageFS template updated"
+log "Production tree cleanup passed"
 log "Phase 2 executor deployment verified"
 
 echo
