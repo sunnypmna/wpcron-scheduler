@@ -65,14 +65,15 @@ install -m 0644 \
   "$SCRIPT_DIR/config/wpcron-wrapper.cfg" \
   "$CAGEFS_CONF"
 
-# Ensure no generated/cache/backup files remain in the installed tree.
-rm -rf "$INSTALL_LIB/__pycache__"
-rm -f "$INSTALL_LIB"/*.bak
-rm -f "$INSTALL_LIB"/*.phase1.bak
-rm -f "$INSTALL_LIB"/*.pyc
+# Validate Python syntax without creating __pycache__ or .pyc files.
+python3 - "$INSTALL_LIB"/*.py <<'PY'
+import sys
+from pathlib import Path
 
-# Validate the installed Python source.
-python3 -m py_compile "$INSTALL_LIB"/*.py
+for filename in sys.argv[1:]:
+  source = Path(filename).read_text()
+  compile(source, filename, "exec")
+PY
 
 # Verify the Phase 2 model/repository fields before refreshing CageFS.
 grep -q 'php_executable' "$INSTALL_LIB/models.py" ||
@@ -93,7 +94,13 @@ grep -q 'relative_script_path=row' "$INSTALL_LIB/repositories.py" ||
 grep -q 'site_root=row' "$INSTALL_LIB/repositories.py" ||
   fail "Phase 2 repositories.py is missing site_root"
 
-# Refresh CageFS after the complete installation.
+# Make absolutely sure generated/cache/backup files are absent before
+# CageFS copies the installed tree into the skeleton.
+rm -rf "$INSTALL_LIB/__pycache__"
+rm -f "$INSTALL_LIB"/*.bak
+rm -f "$INSTALL_LIB"/*.phase1.bak
+rm -f "$INSTALL_LIB"/*.pyc
+
 command -v cagefsctl >/dev/null 2>&1 ||
   fail "cagefsctl not found"
 
